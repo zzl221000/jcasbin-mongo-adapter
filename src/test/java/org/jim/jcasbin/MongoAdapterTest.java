@@ -5,8 +5,6 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.Assert.fail;
-
 /**
  * Created with IntelliJ IDEA.
  *
@@ -19,6 +17,7 @@ public class MongoAdapterTest {
         for (MongoAdapter a : adapters) {
             MongoAdapterTestSets.testAdapter(a);
             MongoAdapterTestSets.testAddAndRemovePolicy(a);
+            MongoAdapterTestSets.testBatchAddAndRemovePolicies(a);
         }
     }
 
@@ -29,11 +28,6 @@ public class MongoAdapterTest {
         try (AdapterCreator.MongoAdapterCreator creator = new AdapterCreator.MongoAdapterCreator()) {
             adapters.add(creator.create());
             testAdapter(adapters);
-        } catch (Exception e) {
-            e.printStackTrace();
-            fail(e.getMessage());
         }
     }
-
-
 }

@@ -4,11 +4,13 @@ import com.mongodb.MongoClientSettings;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
+import com.mongodb.client.model.DeleteOneModel;
 import org.bson.Document;
 import org.bson.codecs.configuration.CodecRegistry;
 import org.bson.codecs.pojo.PojoCodecProvider;
+import org.casbin.jcasbin.model.Assertion;
 import org.casbin.jcasbin.model.Model;
-import org.casbin.jcasbin.persist.Adapter;
+import org.casbin.jcasbin.persist.BatchAdapter;
 import org.jim.jcasbin.domain.CasbinRule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,7 +34,7 @@ import static org.bson.codecs.configuration.CodecRegistries.fromRegistries;
  * Description:
  */
 
-public class MongoAdapter implements Adapter {
+public class MongoAdapter implements BatchAdapter {
     private static final String DEFAULT_DB_NAME = "casbin";
     private static final String DEFAULT_COL_NAME = "casbin_rule";
     private static final Logger log = LoggerFactory.getLogger(MongoAdapter.class);
@@ -91,7 +93,14 @@ public class MongoAdapter implements Adapter {
     @Override
     public void loadPolicy(Model model) {
         Map<String, ArrayList<ArrayList<String>>> policies = this.loading();
-        policies.keySet().forEach(k -> model.model.get(k.substring(0, 1)).get(k).policy.addAll(policies.get(k)));
+        policies.keySet()
+                .forEach(k -> {
+                    Assertion assertion = model.model.get(k.substring(0, 1)).get(k);
+                    for (ArrayList<String> policy : policies.get(k)) {
+                        assertion.policy.add(policy);
+                        assertion.policyIndex.put(policy.toString(), assertion.policy.size() - 1);
+                    }
+        });
     }
 
     Map<String, ArrayList<ArrayList<String>>> loading() {
@@ -187,5 +196,56 @@ public class MongoAdapter implements Adapter {
     @Override
     public void removeFilteredPolicy(String sec, String ptype, int fieldIndex, String... fieldValues) {
         this.removing(sec, ptype, fieldIndex, fieldValues);
+    }
+
+    /**
+     * addPolicies adds authorization rules to the current policy.
+     *
+     * @param sec         the section, "p" or "g".
+     * @param ptype       the policy type, "p", "p2", .. or "g", "g2", ..
+     * @param rules       the rules, like ((sub, obj, act), (sub, obj, act), ...).
+     */
+    @Override
+    public void addPolicies(String sec, String ptype, List<List<String>> rules) {
+        ArrayList<CasbinRule> rulesOfRules = new ArrayList<>(rules.size());
+        for (List<String> rule : rules) {
+            ArrayList<String> ruleClone = new ArrayList<>(rule);
+            ruleClone.add(0, ptype);
+            for (int i = 0; i < 6 - rule.size(); i++) {
+                ruleClone.add("");
+            }
+            Optional<CasbinRule> casbinRule = fromListRule(ruleClone);
+            casbinRule.ifPresent(rulesOfRules::add);
+        }
+
+        if(!rulesOfRules.isEmpty()) {
+            this.getCollection().insertMany(rulesOfRules);
+        }
+    }
+
+    /**
+     * removePolicies removes authorization rules from the current policy.
+     *
+     * @param sec         the section, "p" or "g".
+     * @param ptype       the policy type, "p", "p2", .. or "g", "g2", ..
+     * @param rules       the rules, like ((sub, obj, act), (sub, obj, act), ...).
+     */
+    @Override
+    public void removePolicies(String sec, String ptype, List<List<String>> rules) {
+        ArrayList<DeleteOneModel<CasbinRule>> deleteRequests = new ArrayList<>();
+        for (List<String> rule : rules) {
+            if (rule.isEmpty()) continue;
+            Document filter = new Document("ptype", ptype);
+            int columnIndex = 0;
+            for (String fieldValue : rule) {
+                if (CasbinRule.hasText(fieldValue)) filter.put("v" + columnIndex, fieldValue);
+                columnIndex++;
+            }
+            deleteRequests.add(new DeleteOneModel<>(filter));
+        }
+
+        if(!deleteRequests.isEmpty()) {
+            this.getCollection().bulkWrite(deleteRequests);
+        }
     }
 }
